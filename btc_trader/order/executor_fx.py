@@ -38,7 +38,6 @@ class ExecutorFX:
                  asset_name: str='FX_BTC_JPY',
                  max_spread: float=1000.0,
                  latency: float = 60.0,
-                 latency_model: float = 60.0,
                  loss_cut_margin: float = 10,
                  min_profit_take_margin: float = 100,
                  max_profit_take_margin: float = 500,
@@ -70,8 +69,7 @@ class ExecutorFX:
 
         # parameters for model
         self.__max_profit_take_margin = max_profit_take_margin
-        self.__latency = latency
-        self.__latency_model = latency_model
+        self.__latency_model = latency
         self.__loss_cut_margin = loss_cut_margin
         self.__min_profit_take_margin = min_profit_take_margin
         self.__max_spread = max_spread
@@ -89,7 +87,6 @@ class ExecutorFX:
         self.__log("Trading engine configuration", to_slack=True)
         self.__log(" - asset             : %s" % asset_name, to_slack=True)
         self.__log(" - latency           : %0.2f" % latency, to_slack=True)
-        self.__log(" - latency_model     : %0.2f" % latency_model, to_slack=True)
         self.__log(" - loss_cut_margin   : %0.2f" % loss_cut_margin, to_slack=True)
         self.__log(" - min_profit_take_margin: %0.2f" % min_profit_take_margin, to_slack=True)
         self.__log(" - max_profit_take_margin: %0.2f" % max_profit_take_margin, to_slack=True)
@@ -201,28 +198,34 @@ class ExecutorFX:
         """ module to get current market state """
         health = self.safe_api_request(self.api_public.get_board_state, dict(product_code=self.__asset_name))
         ticker = self.safe_api_request(self.api_public.ticker, dict(product_code=self.__asset_name))
-        timestamp = utc_to_unix(ticker['timestamp'])  # API's timestamp is UTC based
-        best_bid = int(ticker['best_bid'])
-        best_ask = int(ticker['best_ask'])
-        best_bid_size = float(ticker['best_bid_size'])
-        best_ask_size = float(ticker['best_ask_size'])
-        spread = best_ask - best_bid
-        self.__log(' - api time   : %s' % ticker['timestamp'], to_slack=True)
-        self.__log(' - ask (size) : %0.2f (%0.2f)' % (best_ask, best_ask_size), to_slack=True)
-        self.__log('    * %0.4f' % (self.__best_ask_past - best_ask), to_slack=True)
-        self.__log(' - bit (size) : %0.2f (%0.2f)' % (best_bid, best_bid_size), to_slack=True)
-        self.__log('    * %0.4f' % (self.__best_bit_past - best_bid), to_slack=True)
-        self.__log(' - spread     : %0.2f' % spread, to_slack=True)
-        self.__log(' - exchange   : health (%s), state (%s)' % (health['health'], health['state']), to_slack=True)
-        self.__best_ask_past = best_ask
-        self.__best_bit_past = best_bid
+        try:
+            timestamp = utc_to_unix(ticker['timestamp'])  # API's timestamp is UTC based
+            best_bid = int(ticker['best_bid'])
+            best_ask = int(ticker['best_ask'])
+            best_bid_size = float(ticker['best_bid_size'])
+            best_ask_size = float(ticker['best_ask_size'])
+            spread = best_ask - best_bid
+            self.__log(' - api time   : %s' % ticker['timestamp'], to_slack=True)
+            self.__log(' - ask (size) : %0.2f (%0.2f)' % (best_ask, best_ask_size), to_slack=True)
+            self.__log('    * %0.4f' % (self.__best_ask_past - best_ask), to_slack=True)
+            self.__log(' - bit (size) : %0.2f (%0.2f)' % (best_bid, best_bid_size), to_slack=True)
+            self.__log('    * %0.4f' % (self.__best_bit_past - best_bid), to_slack=True)
+            self.__log(' - spread     : %0.2f' % spread, to_slack=True)
+            self.__log(' - exchange   : health (%s), state (%s)' % (health['health'], health['state']), to_slack=True)
+            self.__best_ask_past = best_ask
+            self.__best_bit_past = best_bid
 
-        # If time-delay is more than latency, skip order and reset model buffer
-        if time.time() - timestamp > self.__latency_model * 2:
-            self.__model.reset_buffer()
-            self.__log('ticker API has delayed: %0.2f sec' % (time.time() - timestamp), to_slack=True)
-            self.__log(' - reset model buffer', to_slack=True)
-        return best_bid, best_ask, best_bid_size, best_ask_size, spread, health['health'], health['state']
+            # If time-delay is more than latency, skip order and reset model buffer
+            if time.time() - timestamp > self.__latency_model * 2:
+                self.__model.reset_buffer()
+                self.__log('ticker API has delayed: %0.2f sec' % (time.time() - timestamp), to_slack=True)
+                self.__log(' - reset model buffer', to_slack=True)
+            return best_bid, best_ask, best_bid_size, best_ask_size, spread, health['health'], health['state']
+        except KeyError:
+            self.__log('unknown API error')
+            self.__log('health: %s' % str(ticker))
+            self.__log('ticker: %s' % str(ticker))
+            return None
 
     def __tracking_active_order(self,
                                 acceptance_order_id,
@@ -412,8 +415,8 @@ class ExecutorFX:
             return False, None
 
         # skip if market has trend
-        if trend != 0:
-            self.__log(' - skip order: detect market trend (%i)' % trend, to_slack=True)
+        if trend:
+            self.__log(' - skip order: detect market trend', to_slack=True)
             return False, None
 
         # skip if spread is too large
@@ -508,11 +511,16 @@ class ExecutorFX:
         # PL calculation
         self.__log('Trading report', is_pl=True, to_slack=True)
         __value = self.safe_api_request(self.api_order.get_collateral)
-        pl_total = __value["collateral"] - initial_asset_jpy
-        self.__log(' - PL total           : %0.3f' % pl_total, is_pl=True, to_slack=True)
-        self.__log(" - collateral         : %0.5f" % __value["collateral"], is_pl=True, to_slack=True)
-        self.__log(" - require_collateral : %0.5f" % __value["require_collateral"], is_pl=True, to_slack=True)
-        self.__log(" - open_position_pnl  : %0.5f" % __value["open_position_pnl"], is_pl=True, to_slack=True)
+        try:
+            pl_total = __value["collateral"] - initial_asset_jpy
+            self.__log(' - PL total           : %0.3f' % pl_total, is_pl=True, to_slack=True)
+            self.__log(" - collateral         : %0.5f" % __value["collateral"], is_pl=True, to_slack=True)
+            self.__log(" - require_collateral : %0.5f" % __value["require_collateral"], is_pl=True, to_slack=True)
+            self.__log(" - open_position_pnl  : %0.5f" % __value["open_position_pnl"], is_pl=True, to_slack=True)
+        except KeyError:
+            self.__log('unknown API error')
+            self.__log('get_collateral: %s' % str(__value))
+
         self.__log("Exit", is_pl=True, to_slack=True, push_all=True)
         sys.exit()
 
@@ -555,14 +563,19 @@ class ExecutorFX:
             # swap point
             self.__swap_point()
             # current market
-            best_bid, best_ask, best_bid_size, best_ask_size, spread, health_health, health_state = \
-                self.__current_market()
+            data = self.__current_market()
+            if data is None:
+                self.__log('sleep for a minute')
+                time.sleep(60.0)
+                continue
+
+            best_bid, best_ask, best_bid_size, best_ask_size, spread, health_health, health_state = data
             # prediction: model need update buffer so conduct prediction regardless of order
             pred_ask, trend = self.__model.predict(best_ask)
             predicted_time = time.time()
             if pred_ask is not None:
                 pred_ask = round(pred_ask)
-                self.__log(" - predict ask: %0.2f" % pred_ask, to_slack=True)
+                self.__log(" - predict ask (trend): %0.2f (%s)" % (pred_ask, str(trend)), to_slack=True)
 
             # track order or order new one
             if if_holding_position:

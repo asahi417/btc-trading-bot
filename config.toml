@@ -8,8 +8,7 @@ trend_trigger_count=5
 [executor_parameter]
 asset_name='FX_BTC_JPY'
 max_spread=300.0
-latency=1.0  # sec
-latency_model=1.0  # sec
+latency=1.5  # sec
 max_volume=0.05
 min_volume=0.001
 minute_to_expire=1  # min

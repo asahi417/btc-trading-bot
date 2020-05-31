@@ -46,7 +46,7 @@ class MovingAverage:
         # prediction
         pred = sum([i * w for i, w in zip(data, self.__weight)])
         trend = self.trend()
-        # trend = self.trend(pred)
+
         return pred, trend
 
     def trend(self):
