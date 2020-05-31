@@ -8,13 +8,13 @@ trend_trigger_count=3
 [executor_parameter]
 asset_name='FX_BTC_JPY'
 max_spread=300.0
-latency=1.5  # sec
-max_volume=0.05
-min_volume=0.001
-minute_to_expire=1  # min
-loss_cut_margin=250  # loss cut
-min_profit_take_margin=50  # minimum margin (prediction - price) for new order
-max_profit_take_margin=500  # maximum margin (prediction - price) for new order
+latency=2.0  # sec
+max_volume=0.075
+min_volume=0.01  # minmum 0.01
+minute_to_expire=0.5  # min
+loss_cut_margin=200  # loss cut
+min_profit_take_margin=20  # minimum margin (prediction - price) for new order
+max_profit_take_margin=200  # maximum margin (prediction - price) for new order
 set_jst=true
 
 [slack_webhook_url]

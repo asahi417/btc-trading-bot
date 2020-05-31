@@ -495,7 +495,12 @@ class ExecutorFX:
 
     def run(self):
         value = self.safe_api_request(self.api_order.get_collateral)
-        initial_asset_jpy = value["collateral"]
+        try:
+            initial_asset_jpy = value["collateral"]
+        except KeyError:
+            self.__log('unknown API error')
+            self.__log('get_collateral: %s' % str(value))
+            raise KeyError
         msg = ''
 
         try:
