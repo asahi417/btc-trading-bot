@@ -1,0 +1,23 @@
+model_name='ma'
+
+[model_parameter]
+weighted=true
+step_size=10
+trend_trigger_count=5
+
+[executor_parameter]
+asset_name='FX_BTC_JPY'
+max_spread=300.0
+latency=1.0  # sec
+latency_model=1.0  # sec
+max_volume=0.05
+min_volume=0.001
+minute_to_expire=1  # min
+loss_cut_margin=250  # loss cut
+min_profit_take_margin=50  # minimum margin (prediction - price) for new order
+max_profit_take_margin=500  # maximum margin (prediction - price) for new order
+set_jst=true
+
+[slack_webhook_url]
+log=''
+profit_loss=''

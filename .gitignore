@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.ipynb_checkpoints
+nohup.out
+.python-version
+*.pyc
+.idea
+build
+*.egg-info
+dist
+
+push
+tests
+api_keys_secret.toml
+run_trader.log
+crontab_sample.sh
+docker-compose-dev.yml
