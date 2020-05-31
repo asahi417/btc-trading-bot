@@ -22,7 +22,7 @@ from ..util import utc_to_unix, get_logger, if_swap_point
 from .minimum_price import minimum_price
 
 ASSET_LIST = ['FX_BTC_JPY']
-MAX_API_REQUEST = 100
+MAX_API_REQUEST = 1
 MIN_ORDER_VOLUME = 0.01
 
 
@@ -114,7 +114,7 @@ class ExecutorFX:
                 api_result = api_instance()
             else:
                 api_result = api_instance(**api_parameter)
-            if type(api_result) is dict and "status" in api_result.keys() and api_result["status"] == "error":
+            if type(api_result) is dict and "status" in api_result.keys() and api_result["status"] == "-1":
                 n += 1
                 self.__log('API request get error (%s times)' % n)
                 if 'error_message' in api_result.keys():
@@ -194,10 +194,13 @@ class ExecutorFX:
             self.__log("   - open_position_pnl  : %0.5f" % value["open_position_pnl"])
             time.sleep(self.__minute_for_sp * 60)
 
-    def __current_market(self):
+    def __current_market(self, health_check: bool = True):
         """ module to get current market state """
-        health = self.safe_api_request(self.api_public.get_board_state, dict(product_code=self.__asset_name))
         ticker = self.safe_api_request(self.api_public.ticker, dict(product_code=self.__asset_name))
+        if health_check:
+            health = self.safe_api_request(self.api_public.get_board_state, dict(product_code=self.__asset_name))
+        else:
+            health = None
         try:
             timestamp = utc_to_unix(ticker['timestamp'])  # API's timestamp is UTC based
             best_bid = int(ticker['best_bid'])
@@ -207,11 +210,12 @@ class ExecutorFX:
             spread = best_ask - best_bid
             self.__log(' - api time   : %s' % ticker['timestamp'], to_slack=True)
             self.__log(' - ask (size) : %0.2f (%0.2f)' % (best_ask, best_ask_size), to_slack=True)
-            self.__log('    * %0.4f' % (self.__best_ask_past - best_ask), to_slack=True)
+            self.__log('    * %0.4f' % (best_ask - self.__best_ask_past), to_slack=True)
             self.__log(' - bit (size) : %0.2f (%0.2f)' % (best_bid, best_bid_size), to_slack=True)
-            self.__log('    * %0.4f' % (self.__best_bit_past - best_bid), to_slack=True)
+            self.__log('    * %0.4f' % (best_bid - self.__best_bit_past), to_slack=True)
             self.__log(' - spread     : %0.2f' % spread, to_slack=True)
-            self.__log(' - exchange   : health (%s), state (%s)' % (health['health'], health['state']), to_slack=True)
+            if health_check:
+                self.__log(' - exchange   : health (%s), state (%s)' % (health['health'], health['state']), to_slack=True)
             self.__best_ask_past = best_ask
             self.__best_bit_past = best_bid
 
@@ -220,7 +224,10 @@ class ExecutorFX:
                 self.__model.reset_buffer()
                 self.__log('ticker API has delayed: %0.2f sec' % (time.time() - timestamp), to_slack=True)
                 self.__log(' - reset model buffer', to_slack=True)
-            return best_bid, best_ask, best_bid_size, best_ask_size, spread, health['health'], health['state']
+            if health_check:
+                return best_bid, best_ask, best_bid_size, best_ask_size, spread, health['health'], health['state']
+            else:
+                return best_bid, best_ask, best_bid_size, best_ask_size, spread, None, None
         except KeyError:
             self.__log('unknown API error')
             self.__log('health: %s' % str(ticker))
@@ -303,12 +310,10 @@ class ExecutorFX:
                          parent_order_id=parent_order_id)
         child_order = self.safe_api_request(self.api_order.get_child_orders, parameter)
         self.__log(' - get_child_orders: parent_order_id (%s), order number (%i)' % (parent_order_id, len(child_order)))
-        # self.__log((str(child_order)))
 
         if type(child_order) is dict:  # case (E) or (J)
             parent_orders = self.safe_api_request(self.api_order.get_parent_orders,
                                                   dict(product_code=self.__asset_name, count=1))
-            self.__log((str(parent_orders)))
             target_order = [_p for _p in parent_orders if _p['parent_order_id'] == parent_order_id]
             if len(target_order) == 0:
                 raise ValueError('invalid parent_order_id: %s'
@@ -317,28 +322,24 @@ class ExecutorFX:
                                  % (parent_order_id, str(child_order), str(parent_orders)))
             if target_order[0]['parent_order_state'] == 'EXPIRED':
                 # case (E)
-                self.__log(' - status: ANCHOR orders has been expired', to_slack=True)
+                self.__log(' - status: ANCHOR [expired] -> offset orders', to_slack=True)
                 if_any_order = self.cleanup_positions()
                 if if_any_order:
                     current_asset_jpy = profit_loss()
                 return False, current_asset_jpy
             elif target_order[0]['parent_order_state'] == 'ACTIVE':
                 # case (A)
-                self.__log(' - status: ANCHOR order is ACTIVE (keep tracking)', to_slack=True)
+                self.__log(' - status: ANCHOR [active] -> keep tracking', to_slack=True)
                 return True, current_asset_jpy
             else:
                 # case (J)
-                self.__log(' - status: unclear state (offset order)', to_slack=True)
-                self.__log('   - target parent order: %s' % str(target_order), to_slack=True)
+                self.__log(' - status: unclear state -> offset orders', to_slack=True)
 
         else:  # case (A), (B), (C), (D), (F) or (G)
             state = dict()
             total_commission = 0
             expire_date_unix = None
             for n, child_dict in enumerate(child_order):
-                # self.__log(' - order %i' % n)
-                # for k, v in child_dict.items():
-                #     self.__log('    - %s: %s' % (k, v))
                 state[child_dict['side']] = child_dict['child_order_state']
                 total_commission += float(child_dict['total_commission'])
                 expire_date_unix = utc_to_unix(child_dict['expire_date'])  # API's timestamp is UTC based
@@ -404,10 +405,11 @@ class ExecutorFX:
         # Skip Condition #
         ##################
         # skip if bF is dead
-        if health_health != 'NORMAL' or health_state != 'RUNNING':
-            self.__log(' - skip order: unstable server, health (%s), state (%s)' % (health_health, health_state),
-                       to_slack=True)
-            return False, None
+        if health_health is not None and health_state is not None:
+            if health_health != 'NORMAL' or health_state != 'RUNNING':
+                self.__log(' - skip order: unstable server, health (%s), state (%s)' % (health_health, health_state),
+                           to_slack=True)
+                return False, None
 
         # skip if buffer is not enough
         if pred_ask is None:
@@ -432,13 +434,13 @@ class ExecutorFX:
 
         # skip if current best_ask is larger than prediction or margin is too small.
         volume = min(self.__max_volume, volume)
-        volume = round(volume*10**3)*10**-3
+        volume = round(volume*10**2)*10**-2
         min_price_for_profit, _ = minimum_price(commission=commission_rate, volume=volume, price=best_ask)
         min_profit_take_margin = min_price_for_profit - best_ask + self.__min_profit_take_margin
         predicted_margin = min(self.__max_profit_take_margin, pred_ask - best_ask)
 
         if predicted_margin < min_profit_take_margin:
-            self.__log('   - skip order: predicted margin < min profit margin: %0.2f < %0.2f'
+            self.__log(' - skip order: predicted margin < min profit margin: %0.2f < %0.2f'
                        % (predicted_margin, min_profit_take_margin), to_slack=True)
             return False, None
 
@@ -550,12 +552,14 @@ class ExecutorFX:
         if value["collateral"] == 0:
             raise ValueError("Error: invalid initial account condition")
         if commission_rate != 0.0:
-            raise ValueError("Error: commission rate is not zero! Fxxk! ")
+            raise ValueError("Error: commission rate is not zero ")
 
         # information of active order
         if_holding_position = False
         predicted_time = 0
         acceptance_order_id = None
+        flag_health_check = 0
+        flag_track_order = 0
 
         while True:
             self.__log("#########################")
@@ -568,7 +572,13 @@ class ExecutorFX:
             # swap point
             self.__swap_point()
             # current market
-            data = self.__current_market()
+            if flag_health_check >= 10:
+                flag_health_check = 0
+                data = self.__current_market(True)
+            else:
+                flag_health_check += 1
+                data = self.__current_market(False)
+
             if data is None:
                 self.__log('sleep for a minute')
                 time.sleep(60.0)
@@ -584,12 +594,17 @@ class ExecutorFX:
 
             # track order or order new one
             if if_holding_position:
-                # track active order
-                if_holding_position, current_asset_jpy = self.__tracking_active_order(
-                    acceptance_order_id,
-                    initial_asset_jpy=initial_asset_jpy,
-                    current_asset_jpy=current_asset_jpy
-                )
+                if flag_track_order >= 5:
+                    flag_track_order = 0
+                    # track active order
+                    if_holding_position, current_asset_jpy = self.__tracking_active_order(
+                        acceptance_order_id,
+                        initial_asset_jpy=initial_asset_jpy,
+                        current_asset_jpy=current_asset_jpy
+                    )
+                else:
+                    flag_track_order += 1
+
             else:
                 # make new order
                 if_holding_position, acceptance_order_id = self.__new_order(
