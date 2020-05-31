@@ -51,12 +51,15 @@ class MovingAverage:
 
     def trend(self):
         """ if latest data keep decreasing -> regard it as negative trending """
-        __trend = [int((self.__data_buffer[-i] - self.__data_buffer[- i - 1]) < 0)
-                   for i in range(1, self.__trend_trigger_count)]
-        if sum(__trend) == len(__trend):
-            return True
-        else:
-            return False
+        flgs = [self.__data_buffer[i] > self.__data_buffer[i + 1] for i in range(len(self.__data_buffer) - 1)]
+        return all(flgs[:min(len(flgs), self.__trend_trigger_count)])
+        # decreased_count = sum
+        # __trend = [int((self.__data_buffer[-i] - self.__data_buffer[- i - 1]) < 0)
+        #            for i in range(1, self.__trend_trigger_count)]
+        # if sum(__trend) == len(__trend):
+        #     return True
+        # else:
+        #     return False
 
     def reset_buffer(self):
         self.__pred_buffer = []

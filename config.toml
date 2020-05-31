@@ -3,7 +3,7 @@ model_name='ma'
 [model_parameter]
 weighted=true
 step_size=10
-trend_trigger_count=5
+trend_trigger_count=3
 
 [executor_parameter]
 asset_name='FX_BTC_JPY'
