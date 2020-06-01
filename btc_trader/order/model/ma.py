@@ -5,7 +5,7 @@ class MovingAverage:
     def __init__(self,
                  weighted: bool=False,
                  step_size: int=5,
-                 trend_trigger_count: int = 3):
+                 trend_trigger_count: int = 2):
         """ Moving Average Model
 
          Parameter
@@ -52,7 +52,7 @@ class MovingAverage:
     def trend(self):
         """ if latest data keep decreasing -> regard it as negative trending """
         flgs = [self.__data_buffer[i] > self.__data_buffer[i + 1] for i in range(len(self.__data_buffer) - 1)]
-        return all(flgs[:min(len(flgs), self.__trend_trigger_count)])
+        return all(flgs[-min(len(flgs), self.__trend_trigger_count):])
 
     def reset_buffer(self):
         self.__pred_buffer = []

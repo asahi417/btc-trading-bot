@@ -135,12 +135,19 @@ class ExecutorFX:
             size=size,
             time_in_force='GTC'
         )
-        value = self.safe_api_request(self.api_order.send_child_order, parameter)
-        self.__log(str(value))
-        parameter = dict(
-            product_code=self.__asset_name,
-            child_order_acceptance_id=value['child_order_acceptance_id']
-        )
+        value = ''
+        while True:
+            try:
+                value = self.safe_api_request(self.api_order.send_child_order, parameter)
+                parameter = dict(
+                    product_code=self.__asset_name,
+                    child_order_acceptance_id=value['child_order_acceptance_id']
+                )
+                break
+            except Exception:
+                self.__log(str(value))
+                time.sleep(10)
+
         while True:
             # keep 10 sec interval to avoid 'Over API limit per minute' error
             time.sleep(10)
@@ -237,7 +244,8 @@ class ExecutorFX:
     def __tracking_active_order(self,
                                 acceptance_order_id,
                                 current_asset_jpy,
-                                initial_asset_jpy):
+                                initial_asset_jpy,
+                                order_timestamp):
         """Module to track active order by `get_child_orders` API return, which consists of ANCHOR and OCO order.
         Basically, ANCHOR is limit and OCO consists of limit profit-take (PT) order and market loss-cut (LC) orders,
         and both of PT and LC order have their trigger, so once the market price reach the trigger price, one of
@@ -322,15 +330,18 @@ class ExecutorFX:
                                  % (parent_order_id, str(child_order), str(parent_orders)))
             if target_order[0]['parent_order_state'] == 'EXPIRED':
                 # case (E)
-                self.__log(' - status: ANCHOR [expired] -> offset orders', to_slack=True)
+                self.__log(' - status: ANCHOR [expired]', to_slack=True)
                 if_any_order = self.cleanup_positions()
                 if if_any_order:
                     current_asset_jpy = profit_loss()
                 return False, current_asset_jpy
             elif target_order[0]['parent_order_state'] == 'ACTIVE':
                 # case (A)
-                self.__log(' - status: ANCHOR [active] -> keep tracking', to_slack=True)
-                return True, current_asset_jpy
+                if time.time() - order_timestamp < self.__minute_to_expire * 60:
+                    self.__log(' - status: ANCHOR [active] -> keep tracking', to_slack=True)
+                    return True, current_asset_jpy
+                else:
+                    self.__log(' - status: ANCHOR [active] -> offset orders (expired)', to_slack=True)
             else:
                 # case (J)
                 self.__log(' - status: unclear state -> offset orders', to_slack=True)
@@ -346,8 +357,12 @@ class ExecutorFX:
 
             # case (A)
             if len(state.keys()) == 1 and list(state.values())[0] == 'ACTIVE':
-                self.__log(' - status: ANCHOR [active] -> keep tracking', to_slack=True)
-                return True, current_asset_jpy
+
+                if time.time() - order_timestamp < self.__minute_to_expire * 60:
+                    self.__log(' - status: ANCHOR [active] -> keep tracking', to_slack=True)
+                    return True, current_asset_jpy
+                else:
+                    self.__log(' - status: ANCHOR [active] -> offset orders (expired)', to_slack=True)
 
             # case (B) or (J)
             elif len(state.keys()) == 1 and list(state.values())[0] == 'COMPLETED':
@@ -355,7 +370,13 @@ class ExecutorFX:
                     # case (B)
                     self.__log(' - status: ANCHOR [completed], OCO [not triggered] -> keep tracking',
                                to_slack=True)
-                    return True, current_asset_jpy
+                    if time.time() - order_timestamp < self.__minute_to_expire * 60:
+                        self.__log(' - status: ANCHOR [completed], OCO [not triggered] -> keep tracking',
+                                   to_slack=True)
+                        return True, current_asset_jpy
+                    else:
+                        self.__log(' - status: ANCHOR [completed], OCO [not triggered] '
+                                   '-> offset orders (expired)', to_slack=True)
                 else:
                     # case (J)
                     self.__log(' - status: ANCHOR [completed], OCO [rejected] -> offset orders',
@@ -363,9 +384,13 @@ class ExecutorFX:
 
             # case (C)
             elif len(state.keys()) == 2 and 'ACTIVE' in list(state.values()):
-                self.__log(' - status: ANCHOR [completed], OCO [active] -> keep tracking',
-                           to_slack=True)
-                return True, current_asset_jpy
+                if time.time() - order_timestamp < self.__minute_to_expire * 60:
+                    self.__log(' - status: ANCHOR [completed], OCO [active] -> keep tracking',
+                               to_slack=True)
+                    return True, current_asset_jpy
+                else:
+                    self.__log(' - status: ANCHOR [completed], OCO [active] '
+                               '-> offset orders (expired)', to_slack=True)
 
             # case (D)
             elif len(state.keys()) == 2 and len([v for v in state.values() if v != 'COMPLETED']) == 0:
@@ -409,32 +434,32 @@ class ExecutorFX:
             if health_health != 'NORMAL' or health_state != 'RUNNING':
                 self.__log(' - skip order: unstable server, health (%s), state (%s)' % (health_health, health_state),
                            to_slack=True)
-                return False, None
+                return False, None, None
 
         # skip if buffer is not enough
         if pred_ask is None:
             self.__log(' - skip order: for model buffer', to_slack=True)
-            return False, None
+            return False, None, None
 
         # skip if market has trend
         if trend:
             self.__log(' - skip order: detect market trend', to_slack=True)
-            return False, None
+            return False, None, None
 
         # skip if spread is too large
         if spread > self.__max_spread:
             self.__log(' - skip order: too large spread %0.1f' % spread, to_slack=True)
-            return False, None
+            return False, None, None
 
         # skip if min(best_bid, ask_size) is too small
         volume = min(best_ask_size, best_bid_size)
         if volume < self.__min_volume:
             self.__log(' - skip order: too small volume %0.6f' % volume, to_slack=True)
-            return False, None
+            return False, None, None
 
         # skip if current best_ask is larger than prediction or margin is too small.
         volume = min(self.__max_volume, volume)
-        volume = round(volume*10**2)*10**-2
+        volume = round(volume*10**3)*10**-3
         min_price_for_profit, _ = minimum_price(commission=commission_rate, volume=volume, price=best_ask)
         min_profit_take_margin = min_price_for_profit - best_ask + self.__min_profit_take_margin
         predicted_margin = min(self.__max_profit_take_margin, pred_ask - best_ask)
@@ -442,7 +467,7 @@ class ExecutorFX:
         if predicted_margin < min_profit_take_margin:
             self.__log(' - skip order: predicted margin < min profit margin: %0.2f < %0.2f'
                        % (predicted_margin, min_profit_take_margin), to_slack=True)
-            return False, None
+            return False, None, None
 
         execute_price = predicted_margin + best_ask
 
@@ -487,13 +512,14 @@ class ExecutorFX:
         try:
             acceptance_order_id = order_info['parent_order_acceptance_id']
             self.__log(' - parent_order_acceptance_id: %s' % acceptance_order_id, to_slack=True)
-            return True, acceptance_order_id
+            timestamp = time.time()
+            return True, acceptance_order_id, timestamp
         except Exception:
             msg = traceback.format_exc()
             self.__log('- order failed', to_slack=True)
             self.__log(msg, to_slack=True)
             self.__log('return of send_parent_order API: %s' % str(order_info), to_slack=True)
-            return False, None
+            return False, None, None
 
     def run(self):
         value = self.safe_api_request(self.api_order.get_collateral)
@@ -556,6 +582,7 @@ class ExecutorFX:
 
         # information of active order
         if_holding_position = False
+        order_timestamp = 0
         predicted_time = 0
         acceptance_order_id = None
         flag_health_check = 0
@@ -599,6 +626,7 @@ class ExecutorFX:
                     # track active order
                     if_holding_position, current_asset_jpy = self.__tracking_active_order(
                         acceptance_order_id,
+                        order_timestamp=order_timestamp,
                         initial_asset_jpy=initial_asset_jpy,
                         current_asset_jpy=current_asset_jpy
                     )
@@ -607,7 +635,7 @@ class ExecutorFX:
 
             else:
                 # make new order
-                if_holding_position, acceptance_order_id = self.__new_order(
+                if_holding_position, acceptance_order_id, order_timestamp = self.__new_order(
                     pred_ask,
                     trend,
                     best_ask,
