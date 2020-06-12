@@ -1,20 +1,22 @@
 model_name='ma'
 
 [model_parameter]
-weighted=true
+weighted=false
 step_size=10
-trend_trigger_count=3
+trend_trigger_count=1
+trend_trigger_window=2
+trend_trigger_value=-5
 
 [executor_parameter]
 asset_name='FX_BTC_JPY'
-max_spread=300.0
-latency=1.5  # sec
+max_spread=100.0
+latency=5.0  # sec
 max_volume=0.05
 min_volume=0.01  # minmum 0.01
-minute_to_expire=0.5  # min
-loss_cut_margin=200  # loss cut
+minute_to_expire=0.25  # min
+loss_cut_margin=50  # loss cut
 min_profit_take_margin=20  # minimum margin (prediction - price) for new order
-max_profit_take_margin=200  # maximum margin (prediction - price) for new order
+max_profit_take_margin=25  # maximum margin (prediction - price) for new order
 set_jst=true
 
 [slack_webhook_url]

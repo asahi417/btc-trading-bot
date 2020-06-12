@@ -5,7 +5,9 @@ class MovingAverage:
     def __init__(self,
                  weighted: bool=False,
                  step_size: int=5,
-                 trend_trigger_count: int = 2):
+                 trend_trigger_window: int = 2,
+                 trend_trigger_count: int = 1,
+                 trend_trigger_value: int = 0):
         """ Moving Average Model
 
          Parameter
@@ -24,6 +26,8 @@ class MovingAverage:
             self.__weight = [1.0/step_size] * step_size
 
         self.__trend_trigger_count = trend_trigger_count
+        self.__trend_trigger_window = trend_trigger_window
+        self.__trend_trigger_value = trend_trigger_value
 
         # data buffer for prediction
         self.__data_buffer = []
@@ -51,8 +55,10 @@ class MovingAverage:
 
     def trend(self):
         """ if latest data keep decreasing -> regard it as negative trending """
-        flgs = [self.__data_buffer[i] > self.__data_buffer[i + 1] for i in range(len(self.__data_buffer) - 1)]
-        return all(flgs[-min(len(flgs), self.__trend_trigger_count):])
+        flgs = [self.__data_buffer[i + 1] - self.__data_buffer[i] < self.__trend_trigger_value
+                for i in range(len(self.__data_buffer) - 1)]
+        flgs = flgs[-min(self.__trend_trigger_window, len(flgs)):]
+        return sum(flgs) >= self.__trend_trigger_count
 
     def reset_buffer(self):
         self.__pred_buffer = []
@@ -65,3 +71,9 @@ class MovingAverage:
     @property
     def predict_buffer(self):
         return self.__pred_buffer
+
+
+if __name__ == '__main__':
+    model = MovingAverage(trend_trigger_value=-1)
+    for _i in [0, 1, 1, 1, 1, 2, 3, 3, 2, 1, 0, 1, 2, 3, -100, 1, 2, 3]:
+        print(_i, model.predict(_i)[1])

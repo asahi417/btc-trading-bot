@@ -24,6 +24,7 @@ from .minimum_price import minimum_price
 ASSET_LIST = ['FX_BTC_JPY']
 MAX_API_REQUEST = 1
 MIN_ORDER_VOLUME = 0.01
+ORDER_TRACKING_FREQ = 2
 
 
 class ExecutorFX:
@@ -201,7 +202,7 @@ class ExecutorFX:
             self.__log("   - open_position_pnl  : %0.5f" % value["open_position_pnl"])
             time.sleep(self.__minute_for_sp * 60)
 
-    def __current_market(self, health_check: bool = True):
+    def __current_market(self, health_check: bool = False):
         """ module to get current market state """
         ticker = self.safe_api_request(self.api_public.ticker, dict(product_code=self.__asset_name))
         if health_check:
@@ -300,6 +301,7 @@ class ExecutorFX:
             self.__log(" - collateral         : %0.5f" % __value["collateral"], is_pl=True, to_slack=True)
             self.__log(" - require_collateral : %0.5f" % __value["require_collateral"], is_pl=True, to_slack=True)
             self.__log(" - open_position_pnl  : %0.5f" % __value["open_position_pnl"], is_pl=True, to_slack=True)
+            self.__log(" - time               : %0.3f sec" % (time.time() - order_timestamp), is_pl=True, to_slack=True)
             __current_asset = __value["collateral"]
             return __current_asset
 
@@ -585,7 +587,7 @@ class ExecutorFX:
         order_timestamp = 0
         predicted_time = 0
         acceptance_order_id = None
-        flag_health_check = 0
+        # flag_health_check = 0
         flag_track_order = 0
 
         while True:
@@ -599,12 +601,13 @@ class ExecutorFX:
             # swap point
             self.__swap_point()
             # current market
-            if flag_health_check >= 10:
-                flag_health_check = 0
-                data = self.__current_market(True)
-            else:
-                flag_health_check += 1
-                data = self.__current_market(False)
+            data = self.__current_market()
+            # if flag_health_check >= 10:
+            #     flag_health_check = 0
+            #     data = self.__current_market()
+            # else:
+            #     flag_health_check += 1
+            #     data = self.__current_market(False)
 
             if data is None:
                 self.__log('sleep for a minute')
@@ -621,7 +624,7 @@ class ExecutorFX:
 
             # track order or order new one
             if if_holding_position:
-                if flag_track_order >= 5:
+                if flag_track_order >= ORDER_TRACKING_FREQ:
                     flag_track_order = 0
                     # track active order
                     if_holding_position, current_asset_jpy = self.__tracking_active_order(
@@ -657,5 +660,8 @@ class ExecutorFX:
                 self.__model = model.MovingAverage()
             else:
                 self.__model = model.MovingAverage(**model_parameter)
+                self.__log("Model configuration", to_slack=True)
+                for k in sorted(list(model_parameter.keys())):
+                    self.__log("- %s: %s" % (k, str(model_parameter[k])))
         else:
             raise ValueError('unknown model name: %s' % model_parameter)

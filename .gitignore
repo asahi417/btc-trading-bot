@@ -12,6 +12,7 @@ dist
 push
 tests
 api_keys_secret.toml
+config_secret.toml
 run_trader.log
 crontab_sample.sh
 docker-compose-dev.yml

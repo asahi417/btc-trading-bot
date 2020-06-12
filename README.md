@@ -16,6 +16,8 @@ and put them in `./api_keys.toml` file.
 Run a trading bot: 
 
 ```bash
+export API_KEYS=./api_keys.toml
+export CONFIG=./config.toml
 python run_trader.py
 ```
 
